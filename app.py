@@ -16,24 +16,23 @@ def load_data():
         with open(JSON_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         df = pd.DataFrame(data)
-        # וידוא עמודות נחוצות ועמודות גיבוי ל-Undo
-        required_cols = ["Tester Name", "Model", "Activity", "Frequency", "Last Date Done", "Next Date", "Prev Last Done", "Prev Next Date"]
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = ""
         return df
     return pd.DataFrame()
 
 def save_data(df):
-    # הסרת עמודות כפתורים זמניות לפני שמירה
-    cols_to_drop = ["Update Status", "Undo Update"]
+    # הסרת עמודות ממשק לפני שמירה
+    cols_to_drop = ["Update Status", "Undo"]
     save_df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
     data = save_df.to_dict(orient="records")
     with open(JSON_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-# --- 3. לוגיקת תאריכים ---
-def add_months(sourcedate, months):
+# --- 3. לוגיקת תאריכים חכמה (קדימה ואחורה) ---
+def adjust_months(sourcedate, months):
+    """
+    פונקציה אחת שמוסיפה או מחסירה חודשים.
+    עבור Undo נשלח מספר חודשים שלילי.
+    """
     month = sourcedate.month - 1 + months
     year = sourcedate.year + month // 12
     month = month % 12 + 1
@@ -65,77 +64,70 @@ st.title("🛡️ ICPE Lab PM Management System")
 if 'main_df' not in st.session_state:
     st.session_state.main_df = load_data()
 
-# הכנת תצוגה
+# הכנת גרסת תצוגה עם כפתורי פעולה
 display_df = st.session_state.main_df.copy()
 display_df.insert(0, "Update Status", False)
-display_df.insert(1, "Undo Update", False)
+display_df.insert(1, "Undo", False)
 
-# החלת עיצוב
 styled_df = display_df.style.apply(apply_color, axis=1)
 
 edited_df = st.data_editor(
     styled_df,
     column_config={
-        "Update Status": st.column_config.CheckboxColumn("Confirm PM", help="Update to next period"),
-        "Undo Update": st.column_config.CheckboxColumn("Undo", help="Restore previous dates"),
+        "Update Status": st.column_config.CheckboxColumn("Confirm PM", help="Move forward by frequency"),
+        "Undo": st.column_config.CheckboxColumn("Undo", help="Move backward by frequency"),
         "Next Date": st.column_config.Column(disabled=True),
         "Last Date Done": st.column_config.Column(disabled=True),
-        # הסתרת עמודות הגיבוי מהמשתמש
-        "Prev Last Done": None,
-        "Prev Next Date": None,
     },
     use_container_width=True,
     hide_index=True,
     num_rows="dynamic",
-    key="pm_editor_v5"
+    key="pm_editor_v6"
 )
 
-# כפתור שמירה כללי
+# כפתור שמירה לשינויים ידניים בטקסט
 if st.button("💾 Save Manual Changes"):
     save_data(edited_df)
     st.session_state.main_df = load_data()
     st.rerun()
 
-# לוגיקת כפתורים (V ו-Undo)
-if st.session_state.pm_editor_v5["edited_rows"]:
-    for row_idx_str, changes in st.session_state.pm_editor_v5["edited_rows"].items():
+# לוגיקת כפתורים חכמה
+if st.session_state.pm_editor_v6["edited_rows"]:
+    for row_idx_str, changes in st.session_state.pm_editor_v6["edited_rows"].items():
         row_idx = int(row_idx_str)
+        months = extract_months_count(edited_df.at[row_idx, "Frequency"])
         
-        # --- פעולת UPDATE ---
+        # --- אפשרות 1: אישור PM (קדימה) ---
         if changes.get("Update Status") is True:
             try:
-                # גיבוי המצב הנוכחי לפני שינוי
-                edited_df.at[row_idx, "Prev Last Done"] = edited_df.at[row_idx, "Last Date Done"]
-                edited_df.at[row_idx, "Prev Next Date"] = edited_df.at[row_idx, "Next Date"]
+                current_next = pd.to_datetime(edited_df.at[row_idx, "Next Date"]).date()
+                new_next = adjust_months(current_next, months)
                 
-                # חישוב חדש
-                old_next = pd.to_datetime(edited_df.at[row_idx, "Next Date"]).date()
-                months = extract_months_count(edited_df.at[row_idx, "Frequency"])
-                new_next = add_months(old_next, months)
-                
-                edited_df.at[row_idx, "Last Date Done"] = str(old_next)
+                edited_df.at[row_idx, "Last Date Done"] = str(current_next)
                 edited_df.at[row_idx, "Next Date"] = str(new_next)
                 
                 save_data(edited_df)
                 st.session_state.main_df = load_data()
+                st.toast(f"Updated {edited_df.at[row_idx, 'Tester Name']} (+{months}m)", icon="✅")
                 st.rerun()
-            except: pass
+            except: st.error("Date format error")
 
-        # --- פעולת UNDO ---
-        if changes.get("Undo Update") is True:
-            prev_last = edited_df.at[row_idx, "Prev Last Done"]
-            prev_next = edited_df.at[row_idx, "Prev Next Date"]
-            
-            if prev_next: # בודק שיש מה לשחזר
-                edited_df.at[row_idx, "Last Date Done"] = prev_last
-                edited_df.at[row_idx, "Next Date"] = prev_next
-                # מנקה את הגיבוי כדי שלא יהיה ניתן לעשות אנדו כפול בטעות
-                edited_df.at[row_idx, "Prev Last Done"] = ""
-                edited_df.at[row_idx, "Prev Next Date"] = ""
+        # --- אפשרות 2: Undo חכם (אחורה) ---
+        if changes.get("Undo") is True:
+            try:
+                # מחשבים אחורה מהתאריך הנוכחי שרשום ב-Last Date Done
+                current_last = pd.to_datetime(edited_df.at[row_idx, "Last Date Done"]).date()
+                new_last_done = adjust_months(current_last, -months) # חיסור חודשים
+                
+                # התאריך הבא יהיה מה שהיה ה-Last Done
+                edited_df.at[row_idx, "Next Date"] = str(current_last)
+                edited_df.at[row_idx, "Last Date Done"] = str(new_last_done)
                 
                 save_data(edited_df)
                 st.session_state.main_df = load_data()
-                st.toast("Restored previous dates", icon="🔙")
+                st.toast(f"Undo: Rolled back {edited_df.at[row_idx, 'Tester Name']} (-{months}m)", icon="🔙")
                 st.rerun()
-            else:
-                st.warning("No previous history found for this row.")
+            except: st.error("Could not undo - check date format")
+
+st.divider()
+st.caption("Instructions: 'Confirm PM' moves dates forward. 'Undo' calculates backward based on the Frequency column.")
