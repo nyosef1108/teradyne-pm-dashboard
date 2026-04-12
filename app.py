@@ -28,7 +28,7 @@ name = st.session_state.get("name")
 username = st.session_state.get("username")
 
 # --- 3. DATA CONNECTION ---
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1-EqnZWSUuGBT4foAME6E8kiXstULnQxi/edit"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nMhiCTrNfLIkYaS6Vg/edit?gid=330466147#gid=330466147"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
