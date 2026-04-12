@@ -19,30 +19,32 @@ else:
     st.error("Missing secrets! Please configure Streamlit Secrets.")
     st.stop()
 
-# Render Login Widget (Updated for the latest streamlit-authenticator version)
+# Render Login Widget
 authenticator.login()
-
-# Retrieve authentication status from session state
 auth_status = st.session_state.get("authentication_status")
 name = st.session_state.get("name")
-username = st.session_state.get("username")
 
 # --- 3. DATA CONNECTION ---
-SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nMhiCTrNfLIkYaS6Vg/edit?gid=330466147#gid=330466147"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nMhiCTrNfLIkYaS6Vg/edit#gid=330466147"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    # Read the sheet starting from row 5 (header=4)
-    df = conn.read(spreadsheet=SHEET_URL, header=4)
-    # Clean empty columns
+    # header=5 means the 6th row in the sheet becomes the column names
+    df = conn.read(spreadsheet=SHEET_URL, header=5)
+    
+    # Remove columns that are entirely empty (like the spacer columns A and B)
     df = df.dropna(how='all', axis=1)
+    
+    # Clean column names (remove leading/trailing spaces)
+    df.columns = [str(c).strip() for c in df.columns]
+    
     # Fill merged cells for the first two columns (Tester and Model)
     if not df.empty:
         df.iloc[:, 0] = df.iloc[:, 0].ffill()
         df.iloc[:, 1] = df.iloc[:, 1].ffill()
     return df
 
-# Helper to extract months from frequency string
+# Helper to extract digits from frequency strings
 def extract_months(freq_str):
     try:
         nums = re.findall(r'\d+', str(freq_str))
@@ -55,19 +57,19 @@ def process_updates(df):
     today = pd.Timestamp.now().normalize()
     updated = False
     
+    # Indices based on your sheet: 4=Frequency, 5=Last Date, 6=Next Date
     for idx, row in df.iterrows():
         try:
-            # Column indices based on your structure: 4=Freq, 5=Last, 6=Next
             next_date = pd.to_datetime(row.iloc[6], errors='coerce')
             
             if pd.notnull(next_date) and next_date <= today:
-                # Set old 'Next' as the new 'Last Done'
+                # Update: Old 'Next' becomes new 'Last'
                 df.iat[idx, 5] = row.iloc[6]
                 
-                # Calculate new 'Next Date'
+                # Calculate new 'Next' date
                 months = extract_months(row.iloc[4])
                 new_next = next_date + pd.DateOffset(months=months)
-                df.iat[idx, 6] = new_next.strftime('%m/%d/%Y')
+                df.iat[idx, 6] = new_next.strftime('%Y-%m-%d')
                 updated = True
         except:
             continue
@@ -81,7 +83,6 @@ def process_updates(df):
 
 # --- 5. MAIN UI ---
 
-# CASE 1: Admin is logged in
 if auth_status:
     st.sidebar.success(f"Welcome {name}")
     authenticator.logout('Logout', 'sidebar')
@@ -91,30 +92,30 @@ if auth_status:
     tab1, tab2 = st.tabs(["📊 Schedule View", "🛠️ Admin Control"])
     
     with tab1:
-        if st.button("🔄 Sync & Auto-Update Dates"):
+        if st.button("🔄 Sync & Auto-Update"):
             df = process_updates(df)
         st.dataframe(df, use_container_width=True, hide_index=True)
         
     with tab2:
         st.subheader("Database Editor")
-        st.info("You can edit cells directly, add rows at the bottom, or delete rows.")
+        st.info("Edit cells, add rows, or delete rows. Click Save to sync with Google Sheets.")
         edited_df = st.data_editor(df, use_container_width=True, hide_index=True, num_rows="dynamic")
         
         if st.button("💾 Save Changes to Google Sheets"):
             conn.update(spreadsheet=SHEET_URL, data=edited_df)
-            st.success("Google Sheets updated!")
+            st.success("Google Sheets synchronized!")
 
-# CASE 2: Login failed
 elif auth_status is False:
     st.error("Username/password is incorrect")
-    # Show public view even if login failed
-    st.title("ICPE Lab PM Schedule (Public View)")
+    st.title("ICPE Lab PM Schedule")
     df = load_data()
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-# CASE 3: Not logged in (Initial State)
 else:
     st.title("ICPE Lab PM Schedule")
-    st.info("Login via the sidebar to edit or update dates.")
-    df = load_data()
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.info("Please login via the sidebar to update or edit dates.")
+    try:
+        df = load_data()
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    except:
+        st.warning("Could not connect to Google Sheets. Verify permissions and URL.")
