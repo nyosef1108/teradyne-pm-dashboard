@@ -9,24 +9,31 @@ from calendar import monthrange
 st.set_page_config(page_title="Teradyne PM Manager", layout="wide")
 
 # --- 2. DATA CONNECTION ---
+# SHEET_URL is the link to your specific Google Sheet
 SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nMhiCTrNfLIkYaS6Vg/edit#gid=330466147"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    # Fetch data - ttl=0 ensures we see manual edits immediately after refresh
+    """Fetches data from Google Sheets with no cache (ttl=0)."""
+    # Read raw data
     df = conn.read(spreadsheet=SHEET_URL, header=5, ttl=0)
+    # Cleanup empty columns and strip headers
     df = df.dropna(how='all', axis=1)
     df.columns = [str(c).strip() for c in df.columns]
     
-    # We create a display version with filled merged cells
+    # Create display version with ffill for merged cells
     df_display = df.ffill()
-    
-    # Add a "virtual" column for the button
+    # Ensure Next Date is a string for styling/display purposes
+    if len(df_display.columns) > 6:
+        df_display[df_display.columns[6]] = df_display[df_display.columns[6]].astype(str)
+        
+    # Add the interactive checkbox column
     df_display["Update Status"] = False
     return df_display
 
-# --- 3. DATE CALCULATION LOGIC ---
+# --- 3. SMART DATE LOGIC ---
 def add_months(sourcedate, months):
+    """Calculates next date, handling end-of-month correctly (e.g., Jan 31 -> Feb 28)."""
     month = sourcedate.month - 1 + months
     year = sourcedate.year + month // 12
     month = month % 12 + 1
@@ -34,13 +41,15 @@ def add_months(sourcedate, months):
     return datetime(year, month, day).date()
 
 def extract_months_count(freq_str):
+    """Extracts the number of months from frequency text (e.g., '6 month' -> 6)."""
     nums = re.findall(r'\d+', str(freq_str))
     return int(nums[0]) if nums else 1
 
 # --- 4. SAFE UPDATE FUNCTION ---
 def perform_safe_update(row_idx, df):
+    """Updates specific cells in GSheets without destroying formatting."""
     try:
-        # Get the 'Next Date' and 'Frequency' for calculation
+        # Get data for calculation
         current_next_str = df.iat[row_idx, 6]
         freq_str = df.iat[row_idx, 4]
         
@@ -48,64 +57,75 @@ def perform_safe_update(row_idx, df):
         months = extract_months_count(freq_str)
         new_next = add_months(last_done, months)
         
-        # Calculate the real row in Google Sheets (Header=5 + 2 for 1-based index)
+        # Calculate Excel/Sheet row: Header(5) + 1 (Header row) + 1 (1-based index) = +7
         sheet_row = row_idx + 7
         
-        # Update only specific cells to preserve formatting/merges
-        conn.update(spreadsheet=SHEET_URL, range=f"F{sheet_row}", data=[[str(last_done)]])
-        conn.update(spreadsheet=SHEET_URL, range=f"G{sheet_row}", data=[[str(new_next)]])
+        # Get the underlying gspread client from the connection
+        # This bypasses the 'range' keyword error in some library versions
+        client = conn._instance.client
+        spreadsheet = client.open_by_url(SHEET_URL)
+        worksheet = spreadsheet.get_worksheet(0) # First tab
+        
+        # Update cells: Column F (6) for Last Done, Column G (7) for Next Date
+        worksheet.update_cell(sheet_row, 6, str(last_done))
+        worksheet.update_cell(sheet_row, 7, str(new_next))
         
         st.toast(f"Row {sheet_row} updated successfully!", icon="✅")
         st.rerun()
     except Exception as e:
         st.error(f"Update failed: {e}")
+        st.info("Ensure the Google Sheet is shared with 'Editor' permissions to your Service Account email.")
 
-# --- 5. STYLING ---
+# --- 5. STYLING LOGIC ---
 def color_next_date(val):
+    """Returns CSS for cell background based on dates."""
     try:
         date_obj = pd.to_datetime(val).date()
         today = datetime.now().date()
         next_week = today + timedelta(days=7)
-        if date_obj < today: return 'background-color: #ff4b4b; color: white;'
-        elif today <= date_obj <= next_week: return 'background-color: #fffd8d; color: black;'
-        else: return 'background-color: #90ee90; color: black;'
-    except: return ''
+        
+        if date_obj < today:
+            return 'background-color: #ff4b4b; color: white;'  # Overdue
+        elif today <= date_obj <= next_week:
+            return 'background-color: #fffd8d; color: black;'  # Within 7 days
+        else:
+            return 'background-color: #90ee90; color: black;'  # OK
+    except:
+        return ''
 
-# --- 6. MAIN UI ---
+# --- 6. MAIN USER INTERFACE ---
 st.title("🛡️ ICPE Lab PM Live Manager")
-st.info(f"📅 **Server Date:** {datetime.now().strftime('%d/%m/%Y')} | Updates affect Google Sheets directly.")
+st.info(f"📅 **Server Date:** {datetime.now().strftime('%A, %d/%m/%Y')} | Direct Sync Active")
 
-# Load the data
+# Load fresh data
 df = load_data()
 
-# Identify the 'Next Date' column for styling
+# Style the dataframe
 target_col = df.columns[6]
-
-# Apply styling
 styled_df = df.style.map(color_next_date, subset=[target_col])
 
-# Create the Interactive Data Editor with a button column
-event = st.data_editor(
+# Display interactive data editor
+# Users can only check/uncheck the "Update Status" column
+pm_editor = st.data_editor(
     styled_df,
     column_config={
         "Update Status": st.column_config.CheckboxColumn(
             "Confirm PM Done",
-            help="Check this box to set Last Done to today and calculate the next date",
+            help="Check to update Last Done to current 'Next Date' and calculate future 'Next Date'",
             default=False,
         )
     },
-    disabled=[c for c in df.columns if c != "Update Status"], # Only allow checking the box
+    disabled=[c for c in df.columns if c != "Update Status"],
     use_container_width=True,
     hide_index=True,
-    key="pm_editor"
+    key="pm_table_editor"
 )
 
-# Logic: If someone checks the checkbox, trigger the update
-# We check which row was edited
-if st.session_state.pm_editor["edited_rows"]:
-    for row_idx, changes in st.session_state.pm_editor["edited_rows"].items():
+# Monitor for edits (Checkbox clicks)
+if st.session_state.pm_table_editor["edited_rows"]:
+    for row_idx_str, changes in st.session_state.pm_table_editor["edited_rows"].items():
         if changes.get("Update Status") is True:
-            perform_safe_update(int(row_idx), df)
+            perform_safe_update(int(row_idx_str), df)
 
 st.divider()
-st.caption("Instructions: To update a PM, check the box in the 'Confirm PM Done' column. The Google Sheet will update automatically.")
+st.caption("Instructions: Edit the original Google Sheet for structural changes. Use the checkboxes above to record completed maintenance.")
