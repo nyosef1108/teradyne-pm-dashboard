@@ -4,6 +4,7 @@ import pandas as pd
 import re
 from datetime import datetime, timedelta
 from calendar import monthrange
+import gspread # ייבוא ישיר לעדכון תאים בודדים
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Teradyne PM Manager", layout="wide")
@@ -13,7 +14,6 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nM
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    """Fetches fresh data from the sheet."""
     df = conn.read(spreadsheet=SHEET_URL, header=5, ttl=0)
     df = df.dropna(how='all', axis=1)
     df.columns = [str(c).strip() for c in df.columns]
@@ -25,7 +25,6 @@ def load_data():
 
 # --- 3. DATE LOGIC ---
 def add_months(sourcedate, months):
-    """Handles month increments including end-of-month logic."""
     month = sourcedate.month - 1 + months
     year = sourcedate.year + month // 12
     month = month % 12 + 1
@@ -36,38 +35,34 @@ def extract_months_count(freq_str):
     nums = re.findall(r'\d+', str(freq_str))
     return int(nums[0]) if nums else 1
 
-# --- 4. SAFE UPDATE FUNCTION ---
+# --- 4. SAFE UPDATE FUNCTION (Using gspread directly) ---
 def perform_safe_update(row_idx, df):
-    """Updates only the necessary cells using the official update method."""
     try:
-        # Calculate values
+        # חישוב תאריכים
         current_next_str = df.iat[row_idx, 6]
         freq_str = df.iat[row_idx, 4]
         last_done = pd.to_datetime(current_next_str).date()
         months = extract_months_count(freq_str)
         new_next = add_months(last_done, months)
         
-        # Calculate Row: Header(5) + 1 (Titles) + 1 (1-based index) = +7
+        # חישוב שורה (Header 5 + 1 כותרות + 1 אינדקס = +7)
         sheet_row = row_idx + 7
         
-        # Update Column F (Last Done)
-        conn.update(
-            spreadsheet=SHEET_URL,
-            range=f"F{sheet_row}",
-            data=pd.DataFrame([[str(last_done)]])
-        )
+        # התחברות ישירה באמצעות קרדנציאלים מה-Secrets
+        # אנחנו משתמשים ב-Service Account כדי לעדכן תאים בודדים בבטחה
+        gc = gspread.service_account_from_dict(st.secrets["connections"]["gsheets"])
+        sh = gc.open_by_url(SHEET_URL)
+        worksheet = sh.get_worksheet(0) # הגיליון הראשון
         
-        # Update Column G (Next Date)
-        conn.update(
-            spreadsheet=SHEET_URL,
-            range=f"G{sheet_row}",
-            data=pd.DataFrame([[str(new_next)]])
-        )
+        # עדכון תא בודד בטור F (6) וטור G (7)
+        worksheet.update_cell(sheet_row, 6, str(last_done))
+        worksheet.update_cell(sheet_row, 7, str(new_next))
         
-        st.toast(f"Row {sheet_row} updated!", icon="✅")
+        st.toast(f"Row {sheet_row} updated successfully!", icon="✅")
         st.rerun()
     except Exception as e:
         st.error(f"Update failed: {e}")
+        st.info("Ensure the Service Account email has 'Editor' permissions in the Google Sheet.")
 
 # --- 5. STYLING ---
 def color_next_date(val):
@@ -82,7 +77,7 @@ def color_next_date(val):
 
 # --- 6. MAIN UI ---
 st.title("🛡️ ICPE Lab PM Live Manager")
-st.write(f"📅 **System Date:** {datetime.now().strftime('%d/%m/%Y')}")
+st.write(f"📅 **Today's Date:** {datetime.now().strftime('%d/%m/%Y')}")
 
 df = load_data()
 target_col = df.columns[6]
@@ -93,20 +88,20 @@ pm_table = st.data_editor(
     column_config={
         "Update Status": st.column_config.CheckboxColumn(
             "Confirm PM Done",
-            help="Check to update dates in Google Sheets",
+            help="Click to update dates directly in Google Sheets",
             default=False,
         )
     },
     disabled=[c for c in df.columns if c != "Update Status"],
     use_container_width=True,
     hide_index=True,
-    key="pm_editor_final"
+    key="pm_editor_v3"
 )
 
-if st.session_state.pm_editor_final["edited_rows"]:
-    for row_idx_str, changes in st.session_state.pm_editor_final["edited_rows"].items():
+if st.session_state.pm_editor_v3["edited_rows"]:
+    for row_idx_str, changes in st.session_state.pm_editor_v3["edited_rows"].items():
         if changes.get("Update Status") is True:
             perform_safe_update(int(row_idx_str), df)
 
 st.divider()
-st.caption("Manual edits in Google Sheets are reflected here on refresh.")
+st.caption("The app now updates specific cells to preserve your Sheet's layout and formatting.")
