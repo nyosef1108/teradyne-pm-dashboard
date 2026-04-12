@@ -9,33 +9,23 @@ from calendar import monthrange
 st.set_page_config(page_title="Teradyne PM Manager", layout="wide")
 
 # --- 2. DATA CONNECTION ---
-# Using ttl=0 ensures we see the latest manual edits from Google Sheets on every refresh
 SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nMhiCTrNfLIkYaS6Vg/edit#gid=330466147"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    """Fetches data from Google Sheets and prepares it for display."""
-    # Read raw data starting from row 6
+    """Fetches fresh data from the sheet."""
     df = conn.read(spreadsheet=SHEET_URL, header=5, ttl=0)
-    
-    # Cleanup: remove empty columns and strip whitespace from headers
     df = df.dropna(how='all', axis=1)
     df.columns = [str(c).strip() for c in df.columns]
-    
-    # Fill merged cells (ffill) for the visual display only
     df_display = df.ffill()
-    
-    # Ensure Next Date is a string so styling works reliably
     if len(df_display.columns) > 6:
         df_display[df_display.columns[6]] = df_display[df_display.columns[6]].astype(str)
-        
-    # Add the virtual checkbox column for user interaction
     df_display["Update Status"] = False
     return df_display
 
-# --- 3. SMART DATE LOGIC ---
+# --- 3. DATE LOGIC ---
 def add_months(sourcedate, months):
-    """Calculates future date while handling end-of-month correctly (e.g., Feb 29)."""
+    """Handles month increments including end-of-month logic."""
     month = sourcedate.month - 1 + months
     year = sourcedate.year + month // 12
     month = month % 12 + 1
@@ -43,87 +33,80 @@ def add_months(sourcedate, months):
     return datetime(year, month, day).date()
 
 def extract_months_count(freq_str):
-    """Extracts the digit from strings like '6 months'."""
     nums = re.findall(r'\d+', str(freq_str))
     return int(nums[0]) if nums else 1
 
-# --- 4. SAFE CELL-LEVEL UPDATE ---
+# --- 4. SAFE UPDATE FUNCTION ---
 def perform_safe_update(row_idx, df):
-    """Updates only two specific cells in the sheet to keep formatting intact."""
+    """Updates only the necessary cells using the official update method."""
     try:
-        # Calculate new dates
+        # Calculate values
         current_next_str = df.iat[row_idx, 6]
         freq_str = df.iat[row_idx, 4]
-        
         last_done = pd.to_datetime(current_next_str).date()
         months = extract_months_count(freq_str)
         new_next = add_months(last_done, months)
         
-        # Calculate Sheet Row: Header(5) + 1 (Titles) + 1 (1-based index) = Row Index + 7
+        # Calculate Row: Header(5) + 1 (Titles) + 1 (1-based index) = +7
         sheet_row = row_idx + 7
         
-        # Get gspread client directly from the connection object
-        client = conn.client
-        spreadsheet = client.open_by_url(SHEET_URL)
-        worksheet = spreadsheet.get_worksheet(0) # Assumes first tab
+        # Update Column F (Last Done)
+        conn.update(
+            spreadsheet=SHEET_URL,
+            range=f"F{sheet_row}",
+            data=pd.DataFrame([[str(last_done)]])
+        )
         
-        # Update Column F (6) and Column G (7)
-        worksheet.update_cell(sheet_row, 6, str(last_done))
-        worksheet.update_cell(sheet_row, 7, str(new_next))
+        # Update Column G (Next Date)
+        conn.update(
+            spreadsheet=SHEET_URL,
+            range=f"G{sheet_row}",
+            data=pd.DataFrame([[str(new_next)]])
+        )
         
-        st.toast(f"Row {sheet_row} updated successfully!", icon="✅")
+        st.toast(f"Row {sheet_row} updated!", icon="✅")
         st.rerun()
     except Exception as e:
         st.error(f"Update failed: {e}")
-        st.info("Check if your Service Account has 'Editor' access in Google Sheets.")
 
-# --- 5. VISUAL STYLING ---
+# --- 5. STYLING ---
 def color_next_date(val):
-    """Standard traffic light logic for dates."""
     try:
         date_obj = pd.to_datetime(val).date()
         today = datetime.now().date()
         next_week = today + timedelta(days=7)
-        
-        if date_obj < today:
-            return 'background-color: #ff4b4b; color: white;'  # Overdue
-        elif today <= date_obj <= next_week:
-            return 'background-color: #fffd8d; color: black;'  # Due within a week
-        else:
-            return 'background-color: #90ee90; color: black;'  # OK
-    except:
-        return ''
+        if date_obj < today: return 'background-color: #ff4b4b; color: white;'
+        elif today <= date_obj <= next_week: return 'background-color: #fffd8d; color: black;'
+        else: return 'background-color: #90ee90; color: black;'
+    except: return ''
 
 # --- 6. MAIN UI ---
 st.title("🛡️ ICPE Lab PM Live Manager")
 st.write(f"📅 **System Date:** {datetime.now().strftime('%d/%m/%Y')}")
 
-# Load and style
 df = load_data()
 target_col = df.columns[6]
 styled_df = df.style.map(color_next_date, subset=[target_col])
 
-# Display the interactive table
 pm_table = st.data_editor(
     styled_df,
     column_config={
         "Update Status": st.column_config.CheckboxColumn(
             "Confirm PM Done",
-            help="Check this box to archive the current date and set the next one.",
+            help="Check to update dates in Google Sheets",
             default=False,
         )
     },
     disabled=[c for c in df.columns if c != "Update Status"],
     use_container_width=True,
     hide_index=True,
-    key="main_pm_editor"
+    key="pm_editor_final"
 )
 
-# Listen for the checkbox click
-if st.session_state.main_pm_editor["edited_rows"]:
-    for row_idx_str, changes in st.session_state.main_pm_editor["edited_rows"].items():
+if st.session_state.pm_editor_final["edited_rows"]:
+    for row_idx_str, changes in st.session_state.pm_editor_final["edited_rows"].items():
         if changes.get("Update Status") is True:
             perform_safe_update(int(row_idx_str), df)
 
 st.divider()
-st.caption("Note: Formatting and merged cells in Google Sheets are preserved during updates.")
+st.caption("Manual edits in Google Sheets are reflected here on refresh.")
