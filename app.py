@@ -1,42 +1,46 @@
 import streamlit as st
 import pandas as pd
 import os
+import re
 from datetime import datetime, timedelta
 from calendar import monthrange
-import re
 
-# --- 1. PAGE CONFIG & FILE SETUP ---
-st.set_page_config(page_title="PM Internal Manager", layout="wide")
-DATA_FILE = "pm_data.csv"
+# --- 1. PAGE CONFIG ---
+st.set_page_config(page_title="ICPE Lab PM Manager", layout="wide")
+LOCAL_FILE = "pm_database.xlsx"
 
-# פונקציה ליצירת נתונים ראשוניים אם הקובץ לא קיים
+# --- 2. INITIAL DATA SETUP (מבנה העמודות המדויק שלך) ---
 def create_initial_data():
-    if not os.path.exists(DATA_FILE):
-        data = {
-            "Tester": ["UF 1", "UF 2", "J750-1", "J750-2"],
-            "Model": ["UltraFlex", "UltraFlex", "J750", "J750"],
-            "Activity": ["Monthly PM", "Quarterly PM", "Annual PM", "Monthly PM"],
-            "Location": ["Lab A", "Lab A", "Lab B", "Lab B"],
-            "Frequency": ["1 month", "3 months", "12 months", "1 month"],
-            "Last Done": [str(datetime.now().date())] * 4,
-            "Next Date": [str((datetime.now() + timedelta(days=30)).date())] * 4
-        }
-        pd.DataFrame(data).to_csv(DATA_FILE, index=False)
+    if not os.path.exists(LOCAL_FILE):
+        # יצירת מבנה העמודות בדיוק כמו באקסל המקורי (כולל עמודות ריקות לרווח)
+        columns = [
+            "Tester Name", "Model", "Activity", "Location", 
+            "Frequency", "Last Date Done", "Next Date", "Comments"
+        ]
+        # נתונים לדוגמה במבנה הנכון
+        data = [
+            ["UF 1", "UltraFlex", "Monthly PM", "Lab A", "1 month", "2024-03-01", "2024-04-01", ""],
+            ["UF 2", "UltraFlex", "Quarterly PM", "Lab A", "3 month", "2024-01-01", "2024-04-01", ""]
+        ]
+        df = pd.DataFrame(data, columns=columns)
+        df.to_excel(LOCAL_FILE, index=False)
 
 create_initial_data()
 
-# --- 2. LOAD & SAVE LOGIC ---
+# --- 3. LOAD & SAVE ---
 def load_data():
-    df = pd.read_csv(DATA_FILE)
-    # וידוא שתאריכים הם מחרוזות לצורך עריכה נוחה
-    df['Next Date'] = df['Next Date'].astype(str)
-    df['Last Done'] = df['Last Done'].astype(str)
+    df = pd.read_excel(LOCAL_FILE)
+    df = df.ffill() # תמיכה בתאים ממוזגים ויזואלית
+    df["Update Status"] = False # עמודת הכפתור
     return df
 
 def save_data(df):
-    df.to_csv(DATA_FILE, index=False)
+    # הסרת עמודת העדכון לפני השמירה לאקסל
+    if "Update Status" in df.columns:
+        df = df.drop(columns=["Update Status"])
+    df.to_excel(LOCAL_FILE, index=False)
 
-# --- 3. DATE CALCULATION LOGIC ---
+# --- 4. DATE LOGIC ---
 def add_months(sourcedate, months):
     month = sourcedate.month - 1 + months
     year = sourcedate.year + month // 12
@@ -48,7 +52,7 @@ def extract_months_count(freq_str):
     nums = re.findall(r'\d+', str(freq_str))
     return int(nums[0]) if nums else 1
 
-# --- 4. STYLING ---
+# --- 5. STYLING ---
 def color_next_date(val):
     try:
         date_obj = pd.to_datetime(val).date()
@@ -59,54 +63,53 @@ def color_next_date(val):
         else: return 'background-color: #90ee90; color: black;'
     except: return ''
 
-# --- 5. MAIN UI ---
-st.title("🚀 Internal PM Management System")
-st.write(f"📅 **Today:** {datetime.now().strftime('%d/%m/%Y')}")
+# --- 6. MAIN UI ---
+st.title("🛡️ ICPE Lab PM Manager (Internal)")
+st.info(f"📅 **Today:** {datetime.now().strftime('%d/%m/%Y')} | המידע נשמר מקומית במערכת")
 
-# טעינת הנתונים
-if 'df' not in st.session_state:
-    st.session_state.df = load_data()
+# טעינת נתונים
+df = load_data()
 
-# עיצוב הטבלה
-styled_df = st.session_state.df.style.map(color_next_date, subset=['Next Date'])
+# עיצוב
+target_col = "Next Date"
+styled_df = df.style.map(color_next_date, subset=[target_col])
 
-st.subheader("Database Editor")
-st.info("ניתן לערוך כל תא בטבלה באופן חופשי. לחיצה על הכפתור למטה תבצע עדכון תאריכים אוטומטי לשורות שנבחרו.")
-
-# עורך הנתונים - מאפשר לערוך הכל!
+# הצגת הטבלה המלאה בדיוק כמו במקור
+st.subheader("PM Schedule Table")
 edited_df = st.data_editor(
     styled_df,
+    column_config={
+        "Update Status": st.column_config.CheckboxColumn(
+            "Confirm PM",
+            help="Check to update dates automatically",
+            default=False,
+        )
+    },
     use_container_width=True,
     hide_index=True,
-    num_rows="dynamic", # מאפשר להוסיף ולמחוק שורות!
-    key="data_editor"
+    num_rows="dynamic",
+    key="pm_editor"
 )
 
-# כפתור שמירה כללי (לשינויים ידניים בתאים)
-if st.button("💾 Save All Changes"):
+# כפתור שמירה כללי לשינויי טקסט
+if st.button("💾 Save Manual Changes (Text/Names)"):
     save_data(edited_df)
-    st.session_state.df = edited_df
-    st.success("All changes saved locally!")
+    st.success("Changes Saved!")
     st.rerun()
 
-st.divider()
-st.subheader("Quick Actions")
-
-# עדכון תאריך PM בלחיצת כפתור לשורה ספציפית
-col1, col2 = st.columns(2)
-with col1:
-    selected_row = st.selectbox("Select Item to confirm PM Done:", edited_df['Tester'] + " - " + edited_df['Activity'])
-    if st.button("✅ Confirm PM & Calculate Next"):
-        idx = edited_df[edited_df['Tester'] + " - " + edited_df['Activity'] == selected_row].index[0]
-        
-        # חישוב
-        current_next = pd.to_datetime(edited_df.at[idx, 'Next Date']).date()
-        months = extract_months_count(edited_df.at[idx, 'Frequency'])
-        
-        edited_df.at[idx, 'Last Done'] = str(current_next)
-        edited_df.at[idx, 'Next Date'] = str(add_months(current_next, months))
-        
-        save_data(edited_df)
-        st.session_state.df = edited_df
-        st.success(f"Updated {selected_row}!")
-        st.rerun()
+# לוגיקת עדכון אוטומטי מהצ'קבוקס
+if st.session_state.pm_editor["edited_rows"]:
+    for row_idx_str, changes in st.session_state.pm_editor["edited_rows"].items():
+        if changes.get("Update Status") is True:
+            row_idx = int(row_idx_str)
+            
+            # חישוב תאריכים
+            current_next = pd.to_datetime(edited_df.at[row_idx, "Next Date"]).date()
+            months = extract_months_count(edited_df.at[row_idx, "Frequency"])
+            
+            edited_df.at[row_idx, "Last Date Done"] = str(current_next)
+            edited_df.at[row_idx, "Next Date"] = str(add_months(current_next, months))
+            
+            save_data(edited_df)
+            st.success(f"Updated row {row_idx + 1}!")
+            st.rerun()
