@@ -18,7 +18,7 @@ if "credentials" in st.secrets:
         check_hash=False
     )
 else:
-    st.error("Missing secrets! Please configure Streamlit Secrets.")
+    st.error("Missing secrets!")
     st.stop()
 
 authenticator.login()
@@ -30,32 +30,37 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nM
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    """Fetches and cleans data from the sheet."""
+    """Fetches data and ensures 'Next Date' is treated as a date string."""
     df = conn.read(spreadsheet=SHEET_URL, header=5)
     df = df.dropna(how='all', axis=1)
     df.columns = [str(c).strip() for c in df.columns]
     df = df.ffill()
+    
+    # Force the Next Date column to strings to ensure styling works consistently
+    if len(df.columns) > 6:
+        df[df.columns[6]] = df[df.columns[6]].astype(str)
+        
     return df
 
-# --- 4. STYLING LOGIC (With forced date conversion) ---
+# --- 4. STYLING LOGIC ---
 def color_next_date(val):
-    """Applies Red/Yellow/Green background based on due date."""
+    """Calculates color based on date string value."""
     try:
-        # Force conversion to date object for comparison
-        date_val = pd.to_datetime(val).date()
+        # Clean the string and convert to date object
+        date_obj = pd.to_datetime(val).date()
         today = datetime.now().date()
         next_week = today + timedelta(days=7)
         
-        if date_val < today:
-            return 'background-color: #ff4b4b; color: white;'  # Overdue
-        elif today <= date_val <= next_week:
-            return 'background-color: #fffd8d; color: black;'  # Due soon
+        if date_obj < today:
+            return 'background-color: #ff4b4b; color: white;'  # Overdue - Red
+        elif today <= date_obj <= next_week:
+            return 'background-color: #fffd8d; color: black;'  # Due soon - Yellow
         else:
-            return 'background-color: #90ee90; color: black;'  # Future
+            return 'background-color: #90ee90; color: black;'  # OK - Green
     except:
-        return ''
+        return '' # No color if not a valid date
 
-# --- 5. UPDATE LOGIC ---
+# --- 5. HELPER FUNCTIONS ---
 def extract_months(freq_str):
     try:
         nums = re.findall(r'\d+', str(freq_str))
@@ -79,7 +84,7 @@ def process_updates(df):
             continue
     if updated:
         conn.update(spreadsheet=SHEET_URL, data=df)
-        st.success("Schedules updated successfully!")
+        st.success("Database updated!")
     return df
 
 # --- 6. MAIN UI ---
@@ -91,25 +96,27 @@ if auth_status:
     tab1, tab2 = st.tabs(["📊 Schedule View", "🛠️ Admin Control"])
     
     with tab1:
-        # Display server date for verification
-        st.info(f"📅 **Today is:** {datetime.now().strftime('%A, %d %B %Y')}")
+        st.info(f"📅 **Server Date:** {datetime.now().strftime('%d/%m/%Y')}")
         
-        if st.button("🔄 Sync & Auto-Update Overdue Tasks"):
+        if st.button("🔄 Sync & Auto-Update"):
             df = process_updates(df)
+            st.rerun() # Refresh page to show new colors
+            
+        # Get the name of the 'Next Date' column
+        target_col = df.columns[6]
         
-        # Identify 'Next Date' column (index 6)
-        next_date_col = df.columns[6]
+        # Apply the styling (using map instead of applymap)
+        styled_df = df.style.map(color_next_date, subset=[target_col])
         
-        # Apply the styling and display
-        styled_df = df.style.applymap(color_next_date, subset=[next_date_col])
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
         
     with tab2:
         st.subheader("Database Editor")
         edited_df = st.data_editor(df, use_container_width=True, hide_index=True, num_rows="dynamic")
-        if st.button("💾 Save Changes to Google Sheets"):
+        if st.button("💾 Save Changes"):
             conn.update(spreadsheet=SHEET_URL, data=edited_df)
-            st.success("Google Sheets synchronized!")
+            st.success("Synced!")
+            st.rerun()
 
 elif auth_status is False:
     st.error("Login failed.")
@@ -117,5 +124,8 @@ elif auth_status is False:
 
 else:
     st.title("ICPE Lab PM Schedule")
-    st.info("Please login to update or edit dates.")
-    st.dataframe(load_data(), use_container_width=True, hide_index=True)
+    st.info("Please login to manage the database.")
+    # Show read-only styled table even for non-logged in users
+    raw_df = load_data()
+    target_col = raw_df.columns[6]
+    st.dataframe(raw_df.style.map(color_next_date, subset=[target_col]), use_container_width=True, hide_index=True)
