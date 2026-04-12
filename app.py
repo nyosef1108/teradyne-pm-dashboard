@@ -1,107 +1,86 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-import re
 from datetime import datetime, timedelta
-from calendar import monthrange
-import gspread # ייבוא ישיר לעדכון תאים בודדים
 
 # --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="Teradyne PM Manager", layout="wide")
+st.set_page_config(page_title="Teradyne PM Dashboard", layout="wide")
 
 # --- 2. DATA CONNECTION ---
+# SHEET_URL is the link to your Google Sheet
 SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nMhiCTrNfLIkYaS6Vg/edit#gid=330466147"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
+    """
+    Fetches data from Google Sheets.
+    ttl=0 ensures we bypass any cache and get the 'Live' version of your manual edits.
+    """
+    # Read the sheet starting from row 6 (header=5)
     df = conn.read(spreadsheet=SHEET_URL, header=5, ttl=0)
+    
+    # Clean up empty columns and whitespace
     df = df.dropna(how='all', axis=1)
     df.columns = [str(c).strip() for c in df.columns]
-    df_display = df.ffill()
-    if len(df_display.columns) > 6:
-        df_display[df_display.columns[6]] = df_display[df_display.columns[6]].astype(str)
-    df_display["Update Status"] = False
-    return df_display
-
-# --- 3. DATE LOGIC ---
-def add_months(sourcedate, months):
-    month = sourcedate.month - 1 + months
-    year = sourcedate.year + month // 12
-    month = month % 12 + 1
-    day = min(sourcedate.day, monthrange(year, month)[1])
-    return datetime(year, month, day).date()
-
-def extract_months_count(freq_str):
-    nums = re.findall(r'\d+', str(freq_str))
-    return int(nums[0]) if nums else 1
-
-# --- 4. SAFE UPDATE FUNCTION (Using gspread directly) ---
-def perform_safe_update(row_idx, df):
-    try:
-        # חישוב תאריכים
-        current_next_str = df.iat[row_idx, 6]
-        freq_str = df.iat[row_idx, 4]
-        last_done = pd.to_datetime(current_next_str).date()
-        months = extract_months_count(freq_str)
-        new_next = add_months(last_done, months)
+    
+    # Handle merged cells (ffill) so the app looks organized even if cells are merged in Excel
+    df = df.ffill()
+    
+    # Ensure 'Next Date' column is treated as a string for the coloring logic
+    if len(df.columns) > 6:
+        next_date_col = df.columns[6]
+        df[next_date_col] = df[next_date_col].astype(str)
         
-        # חישוב שורה (Header 5 + 1 כותרות + 1 אינדקס = +7)
-        sheet_row = row_idx + 7
-        
-        # התחברות ישירה באמצעות קרדנציאלים מה-Secrets
-        # אנחנו משתמשים ב-Service Account כדי לעדכן תאים בודדים בבטחה
-        gc = gspread.service_account_from_dict(st.secrets["connections"]["gsheets"])
-        sh = gc.open_by_url(SHEET_URL)
-        worksheet = sh.get_worksheet(0) # הגיליון הראשון
-        
-        # עדכון תא בודד בטור F (6) וטור G (7)
-        worksheet.update_cell(sheet_row, 6, str(last_done))
-        worksheet.update_cell(sheet_row, 7, str(new_next))
-        
-        st.toast(f"Row {sheet_row} updated successfully!", icon="✅")
-        st.rerun()
-    except Exception as e:
-        st.error(f"Update failed: {e}")
-        st.info("Ensure the Service Account email has 'Editor' permissions in the Google Sheet.")
+    return df
 
-# --- 5. STYLING ---
+# --- 3. STYLING LOGIC ---
 def color_next_date(val):
+    """
+    Traffic light logic:
+    Red: Overdue | Yellow: Due within 7 days | Green: Future
+    """
     try:
+        # Convert string to date object
         date_obj = pd.to_datetime(val).date()
         today = datetime.now().date()
         next_week = today + timedelta(days=7)
-        if date_obj < today: return 'background-color: #ff4b4b; color: white;'
-        elif today <= date_obj <= next_week: return 'background-color: #fffd8d; color: black;'
-        else: return 'background-color: #90ee90; color: black;'
-    except: return ''
+        
+        if date_obj < today:
+            return 'background-color: #ff4b4b; color: white;'  # Red
+        elif today <= date_obj <= next_week:
+            return 'background-color: #fffd8d; color: black;'  # Yellow
+        else:
+            return 'background-color: #90ee90; color: black;'  # Green
+    except:
+        return '' # No color if date is invalid
 
-# --- 6. MAIN UI ---
-st.title("🛡️ ICPE Lab PM Live Manager")
-st.write(f"📅 **Today's Date:** {datetime.now().strftime('%d/%m/%Y')}")
+# --- 4. MAIN UI ---
+st.title("🛡️ ICPE Lab PM Live Dashboard")
 
-df = load_data()
-target_col = df.columns[6]
-styled_df = df.style.map(color_next_date, subset=[target_col])
+# Display a live clock to show when the data was last refreshed
+st.caption(f"Last updated from Google Sheets: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
 
-pm_table = st.data_editor(
-    styled_df,
-    column_config={
-        "Update Status": st.column_config.CheckboxColumn(
-            "Confirm PM Done",
-            help="Click to update dates directly in Google Sheets",
-            default=False,
-        )
-    },
-    disabled=[c for c in df.columns if c != "Update Status"],
-    use_container_width=True,
-    hide_index=True,
-    key="pm_editor_v3"
-)
+try:
+    # Load the fresh data
+    df = load_data()
+    
+    # Apply the styling to the 'Next Date' column (index 6)
+    target_col = df.columns[6]
+    styled_df = df.style.map(color_next_date, subset=[target_col])
+    
+    # Display the table - Read Only mode
+    st.dataframe(
+        styled_df, 
+        use_container_width=True, 
+        hide_index=True
+    )
+    
+    st.success("✅ Dashboard is live and syncing. Any manual edits in the Google Sheet will appear here on refresh.")
 
-if st.session_state.pm_editor_v3["edited_rows"]:
-    for row_idx_str, changes in st.session_state.pm_editor_v3["edited_rows"].items():
-        if changes.get("Update Status") is True:
-            perform_safe_update(int(row_idx_str), df)
+except Exception as e:
+    st.error(f"Could not connect to Google Sheets: {e}")
+    st.info("Please verify the spreadsheet URL and sharing permissions.")
 
-st.divider()
-st.caption("The app now updates specific cells to preserve your Sheet's layout and formatting.")
+# --- 5. AUTOMATIC REFRESH (Optional Tip) ---
+# If you want the app to refresh itself every X minutes without clicking F5, 
+# you can add: st_autorefresh(interval=60000) from the streamlit_autorefresh package.
