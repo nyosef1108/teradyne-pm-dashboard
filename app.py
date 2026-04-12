@@ -9,7 +9,6 @@ st.set_page_config(page_title="Teradyne PM Manager", layout="wide")
 
 # --- 2. AUTHENTICATION SETUP ---
 if "credentials" in st.secrets:
-    # We added check_hash=False to allow plain text passwords from secrets
     authenticator = stauth.Authenticate(
         st.secrets["credentials"].to_dict(),
         st.secrets["cookie"]["name"],
@@ -31,19 +30,22 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nM
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    # header=5 skips the first 5 rows and uses the 6th as column names
+    # Read data starting from row 6
     df = conn.read(spreadsheet=SHEET_URL, header=5)
     
-    # Drop completely empty columns (like spacer columns A, B)
+    # Drop completely empty columns
     df = df.dropna(how='all', axis=1)
     
-    # Clean column names from any leading/trailing whitespace
+    # Clean column names
     df.columns = [str(c).strip() for c in df.columns]
     
-    # Handle merged cells for 'Tester' and 'Model' columns
-    if not df.empty:
-        df.iloc[:, 0] = df.iloc[:, 0].ffill()
-        df.iloc[:, 1] = df.iloc[:, 1].ffill()
+    # --- FIX: Handle all merged/empty cells (Forward Fill) ---
+    # This fills None values with the last valid entry for the specified columns
+    columns_to_fill = ['Tester', 'Model', 'Activity Group'] # Add more columns here if needed
+    for col in columns_to_fill:
+        if col in df.columns:
+            df[col] = df[col].ffill()
+            
     return df
 
 # Helper to extract numbers from frequency text
@@ -59,17 +61,17 @@ def process_updates(df):
     today = pd.Timestamp.now().normalize()
     updated = False
     
-    # Column map based on your file: 4=Freq, 5=Last, 6=Next
     for idx, row in df.iterrows():
         try:
+            # Column 6 is 'Next Date'
             next_date = pd.to_datetime(row.iloc[6], errors='coerce')
             
             if pd.notnull(next_date) and next_date <= today:
-                # Set old 'Next' date as the new 'Last Date Done'
+                # Set old 'Next' date as the new 'Last Date Done' (Column 5)
                 df.iat[idx, 5] = row.iloc[6]
                 
                 # Calculate new 'Next' date
-                months = extract_months(row.iloc[4])
+                months = extract_months(row.iloc[4]) # Column 4 is Frequency
                 new_next = next_date + pd.DateOffset(months=months)
                 df.iat[idx, 6] = new_next.strftime('%Y-%m-%d')
                 updated = True
