@@ -30,7 +30,7 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nM
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    # Read data starting from row 6
+    # Read data starting from row 6 (header=5)
     df = conn.read(spreadsheet=SHEET_URL, header=5)
     
     # Drop completely empty columns
@@ -39,12 +39,10 @@ def load_data():
     # Clean column names
     df.columns = [str(c).strip() for c in df.columns]
     
-    # --- FIX: Handle all merged/empty cells (Forward Fill) ---
-    # This fills None values with the last valid entry for the specified columns
-    columns_to_fill = ['Tester', 'Model', 'Activity Group'] # Add more columns here if needed
-    for col in columns_to_fill:
-        if col in df.columns:
-            df[col] = df[col].ffill()
+    # --- FIX: Handle ALL merged cells in the entire table ---
+    # This ensures that for every column, if a cell is empty (NaN), 
+    # it takes the value from the row above it.
+    df = df.ffill()
             
     return df
 
@@ -61,17 +59,18 @@ def process_updates(df):
     today = pd.Timestamp.now().normalize()
     updated = False
     
+    # Column map based on common structure: 4=Freq, 5=Last, 6=Next
     for idx, row in df.iterrows():
         try:
-            # Column 6 is 'Next Date'
+            # We assume 'Next Date' is the 7th column (index 6)
             next_date = pd.to_datetime(row.iloc[6], errors='coerce')
             
             if pd.notnull(next_date) and next_date <= today:
-                # Set old 'Next' date as the new 'Last Date Done' (Column 5)
+                # Update logic: Last Date Done = Old Next Date
                 df.iat[idx, 5] = row.iloc[6]
                 
-                # Calculate new 'Next' date
-                months = extract_months(row.iloc[4]) # Column 4 is Frequency
+                # Calculate new 'Next Date'
+                months = extract_months(row.iloc[4])
                 new_next = next_date + pd.DateOffset(months=months)
                 df.iat[idx, 6] = new_next.strftime('%Y-%m-%d')
                 updated = True
@@ -80,7 +79,7 @@ def process_updates(df):
             
     if updated:
         conn.update(spreadsheet=SHEET_URL, data=df)
-        st.success("Schedules updated successfully!")
+        st.success("All overdue PMs have been updated and synced!")
     else:
         st.info("No pending updates found for today.")
     return df
@@ -102,12 +101,12 @@ if auth_status:
         
     with tab2:
         st.subheader("Database Editor")
-        st.info("Edit cells, add rows, or delete rows. Click Save to sync with Google Sheets.")
+        st.info("Edit values or add/delete rows. Remember to click Save.")
         edited_df = st.data_editor(df, use_container_width=True, hide_index=True, num_rows="dynamic")
         
         if st.button("💾 Save Changes to Google Sheets"):
             conn.update(spreadsheet=SHEET_URL, data=edited_df)
-            st.success("Google Sheets synchronized!")
+            st.success("Google Sheets updated successfully!")
 
 elif auth_status is False:
     st.error("Username/password is incorrect")
@@ -117,7 +116,7 @@ elif auth_status is False:
 
 else:
     st.title("ICPE Lab PM Schedule")
-    st.info("Please login via the sidebar to update or edit dates.")
+    st.info("Please login via the sidebar to manage the database.")
     try:
         df = load_data()
         st.dataframe(df, use_container_width=True, hide_index=True)
