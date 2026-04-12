@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import json
 import os
 import re
 from datetime import datetime, timedelta
@@ -7,40 +8,36 @@ from calendar import monthrange
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="ICPE Lab PM Manager", layout="wide")
-LOCAL_FILE = "pm_database.xlsx"
+JSON_FILE = "pm_data.json"
 
-# --- 2. INITIAL DATA SETUP (מבנה העמודות המדויק שלך) ---
-def create_initial_data():
-    if not os.path.exists(LOCAL_FILE):
-        # יצירת מבנה העמודות בדיוק כמו באקסל המקורי (כולל עמודות ריקות לרווח)
+# --- 2. DATA PERSISTENCE ---
+def load_data():
+    if os.path.exists(JSON_FILE):
+        with open(JSON_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return pd.DataFrame(data)
+    else:
+        # יצירת מבנה העמודות המדויק שלך אם הקובץ לא קיים
         columns = [
             "Tester Name", "Model", "Activity", "Location", 
             "Frequency", "Last Date Done", "Next Date", "Comments"
         ]
-        # נתונים לדוגמה במבנה הנכון
-        data = [
-            ["UF 1", "UltraFlex", "Monthly PM", "Lab A", "1 month", "2024-03-01", "2024-04-01", ""],
-            ["UF 2", "UltraFlex", "Quarterly PM", "Lab A", "3 month", "2024-01-01", "2024-04-01", ""]
+        # שורת דוגמה ראשונה
+        initial_data = [
+            ["UF 1", "UltraFlex", "Monthly PM", "Lab A", "1 month", "2024-03-01", "2024-04-01", ""]
         ]
-        df = pd.DataFrame(data, columns=columns)
-        df.to_excel(LOCAL_FILE, index=False)
-
-create_initial_data()
-
-# --- 3. LOAD & SAVE ---
-def load_data():
-    df = pd.read_excel(LOCAL_FILE)
-    df = df.ffill() # תמיכה בתאים ממוזגים ויזואלית
-    df["Update Status"] = False # עמודת הכפתור
-    return df
+        df = pd.DataFrame(initial_data, columns=columns)
+        save_data(df)
+        return df
 
 def save_data(df):
-    # הסרת עמודת העדכון לפני השמירה לאקסל
-    if "Update Status" in df.columns:
-        df = df.drop(columns=["Update Status"])
-    df.to_excel(LOCAL_FILE, index=False)
+    # הסרת עמודת העדכון הזמנית לפני השמירה
+    cols_to_save = [c for c in df.columns if c != "Update Status"]
+    data_to_save = df[cols_to_save].to_dict(orient="records")
+    with open(JSON_FILE, "w", encoding="utf-8") as f:
+        json.dump(data_to_save, f, indent=4, ensure_ascii=False)
 
-# --- 4. DATE LOGIC ---
+# --- 3. DATE LOGIC ---
 def add_months(sourcedate, months):
     month = sourcedate.month - 1 + months
     year = sourcedate.year + month // 12
@@ -52,7 +49,7 @@ def extract_months_count(freq_str):
     nums = re.findall(r'\d+', str(freq_str))
     return int(nums[0]) if nums else 1
 
-# --- 5. STYLING ---
+# --- 4. STYLING ---
 def color_next_date(val):
     try:
         date_obj = pd.to_datetime(val).date()
@@ -63,25 +60,28 @@ def color_next_date(val):
         else: return 'background-color: #90ee90; color: black;'
     except: return ''
 
-# --- 6. MAIN UI ---
-st.title("🛡️ ICPE Lab PM Manager (Internal)")
-st.info(f"📅 **Today:** {datetime.now().strftime('%d/%m/%Y')} | המידע נשמר מקומית במערכת")
+# --- 5. MAIN UI ---
+st.title("🛡️ ICPE Lab PM Manager (JSON Mode)")
+st.info(f"📅 **Today's Date:** {datetime.now().strftime('%d/%m/%Y')} | הנתונים נשמרים בתוך המערכת")
 
-# טעינת נתונים
-df = load_data()
+# טעינה ראשונית של הנתונים ל-Session State
+if 'main_df' not in st.session_state:
+    st.session_state.main_df = load_data()
 
-# עיצוב
-target_col = "Next Date"
-styled_df = df.style.map(color_next_date, subset=[target_col])
+# יצירת עמודת כפתור זמנית לתצוגה
+display_df = st.session_state.main_df.copy()
+display_df["Update Status"] = False
 
-# הצגת הטבלה המלאה בדיוק כמו במקור
-st.subheader("PM Schedule Table")
+# הגדרת עיצוב לעמודת התאריך הבא (עמודה מספר 6)
+styled_df = display_df.style.map(color_next_date, subset=["Next Date"])
+
+# הטבלה המרכזית - עריכה חופשית של כל תא
 edited_df = st.data_editor(
     styled_df,
     column_config={
         "Update Status": st.column_config.CheckboxColumn(
             "Confirm PM",
-            help="Check to update dates automatically",
+            help="סימון התיבה יעדכן את התאריכים אוטומטית",
             default=False,
         )
     },
@@ -91,25 +91,36 @@ edited_df = st.data_editor(
     key="pm_editor"
 )
 
-# כפתור שמירה כללי לשינויי טקסט
-if st.button("💾 Save Manual Changes (Text/Names)"):
-    save_data(edited_df)
-    st.success("Changes Saved!")
-    st.rerun()
+# כפתורים ופעולות
+col1, col2 = st.columns([1, 5])
+with col1:
+    if st.button("💾 Save Changes"):
+        save_data(edited_df)
+        st.session_state.main_df = load_data()
+        st.success("Saved!")
+        st.rerun()
 
-# לוגיקת עדכון אוטומטי מהצ'קבוקס
+# בדיקה אם בוצע עדכון דרך הצ'קבוקס
 if st.session_state.pm_editor["edited_rows"]:
     for row_idx_str, changes in st.session_state.pm_editor["edited_rows"].items():
         if changes.get("Update Status") is True:
             row_idx = int(row_idx_str)
             
-            # חישוב תאריכים
-            current_next = pd.to_datetime(edited_df.at[row_idx, "Next Date"]).date()
-            months = extract_months_count(edited_df.at[row_idx, "Frequency"])
-            
-            edited_df.at[row_idx, "Last Date Done"] = str(current_next)
-            edited_df.at[row_idx, "Next Date"] = str(add_months(current_next, months))
-            
-            save_data(edited_df)
-            st.success(f"Updated row {row_idx + 1}!")
-            st.rerun()
+            try:
+                # לוגיקת עדכון תאריכים
+                current_next = pd.to_datetime(edited_df.at[row_idx, "Next Date"]).date()
+                months = extract_months_count(edited_df.at[row_idx, "Frequency"])
+                
+                edited_df.at[row_idx, "Last Date Done"] = str(current_next)
+                edited_df.at[row_idx, "Next Date"] = str(add_months(current_next, months))
+                
+                # שמירה ורענון
+                save_data(edited_df)
+                st.session_state.main_df = load_data()
+                st.toast(f"Updated row {row_idx + 1}!", icon="✅")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error calculating dates: {e}")
+
+st.divider()
+st.caption("הוראות: ניתן לערוך כל תא בטבלה. לשינוי שמות או ערכים ידניים יש ללחוץ על Save Changes. לעדכון PM שבוצע, פשוט סמן V בתיבה.")
