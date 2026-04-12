@@ -9,11 +9,13 @@ st.set_page_config(page_title="Teradyne PM Manager", layout="wide")
 
 # --- 2. AUTHENTICATION SETUP ---
 if "credentials" in st.secrets:
+    # We added check_hash=False to allow plain text passwords from secrets
     authenticator = stauth.Authenticate(
         st.secrets["credentials"].to_dict(),
         st.secrets["cookie"]["name"],
         st.secrets["cookie"]["key"],
-        st.secrets["cookie"]["expiry_days"]
+        st.secrets["cookie"]["expiry_days"],
+        check_hash=False
     )
 else:
     st.error("Missing secrets! Please configure Streamlit Secrets.")
@@ -29,22 +31,22 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nM
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    # header=5 means the 6th row in the sheet becomes the column names
+    # header=5 skips the first 5 rows and uses the 6th as column names
     df = conn.read(spreadsheet=SHEET_URL, header=5)
     
-    # Remove columns that are entirely empty (like the spacer columns A and B)
+    # Drop completely empty columns (like spacer columns A, B)
     df = df.dropna(how='all', axis=1)
     
-    # Clean column names (remove leading/trailing spaces)
+    # Clean column names from any leading/trailing whitespace
     df.columns = [str(c).strip() for c in df.columns]
     
-    # Fill merged cells for the first two columns (Tester and Model)
+    # Handle merged cells for 'Tester' and 'Model' columns
     if not df.empty:
         df.iloc[:, 0] = df.iloc[:, 0].ffill()
         df.iloc[:, 1] = df.iloc[:, 1].ffill()
     return df
 
-# Helper to extract digits from frequency strings
+# Helper to extract numbers from frequency text
 def extract_months(freq_str):
     try:
         nums = re.findall(r'\d+', str(freq_str))
@@ -57,13 +59,13 @@ def process_updates(df):
     today = pd.Timestamp.now().normalize()
     updated = False
     
-    # Indices based on your sheet: 4=Frequency, 5=Last Date, 6=Next Date
+    # Column map based on your file: 4=Freq, 5=Last, 6=Next
     for idx, row in df.iterrows():
         try:
             next_date = pd.to_datetime(row.iloc[6], errors='coerce')
             
             if pd.notnull(next_date) and next_date <= today:
-                # Update: Old 'Next' becomes new 'Last'
+                # Set old 'Next' date as the new 'Last Date Done'
                 df.iat[idx, 5] = row.iloc[6]
                 
                 # Calculate new 'Next' date
