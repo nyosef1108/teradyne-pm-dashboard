@@ -1,131 +1,117 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
-import streamlit_authenticator as stauth
 import pandas as pd
 import re
 from datetime import datetime, timedelta
+from calendar import monthrange
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Teradyne PM Manager", layout="wide")
 
-# --- 2. AUTHENTICATION SETUP ---
-if "credentials" in st.secrets:
-    authenticator = stauth.Authenticate(
-        st.secrets["credentials"].to_dict(),
-        st.secrets["cookie"]["name"],
-        st.secrets["cookie"]["key"],
-        st.secrets["cookie"]["expiry_days"],
-        check_hash=False
-    )
-else:
-    st.error("Missing secrets!")
-    st.stop()
-
-authenticator.login()
-auth_status = st.session_state.get("authentication_status")
-name = st.session_state.get("name")
-
-# --- 3. DATA CONNECTION ---
+# --- 2. DATA CONNECTION ---
+# Using ttl=0 to ensure we always see the most manual edits from the sheet
 SHEET_URL = "https://docs.google.com/spreadsheets/d/17jIiOurOabjkobbID_ZkNj_u5nMhiCTrNfLIkYaS6Vg/edit#gid=330466147"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    """Fetches data and ensures 'Next Date' is treated as a date string."""
-    df = conn.read(spreadsheet=SHEET_URL, header=5)
+    df = conn.read(spreadsheet=SHEET_URL, header=5, ttl=0)
     df = df.dropna(how='all', axis=1)
     df.columns = [str(c).strip() for c in df.columns]
-    df = df.ffill()
-    
-    # Force the Next Date column to strings to ensure styling works consistently
-    if len(df.columns) > 6:
-        df[df.columns[6]] = df[df.columns[6]].astype(str)
-        
-    return df
+    # ffill is only for the visual representation in the app
+    df_visual = df.ffill()
+    return df, df_visual
 
-# --- 4. STYLING LOGIC ---
-def color_next_date(val):
-    """Calculates color based on date string value."""
+# --- 3. DATE CALCULATION LOGIC ---
+def add_months(sourcedate, months):
+    month = sourcedate.month - 1 + months
+    year = sourcedate.year + month // 12
+    month = month % 12 + 1
+    day = min(sourcedate.day, monthrange(year, month)[1])
+    return datetime(year, month, day).date()
+
+def extract_months_count(freq_str):
+    nums = re.findall(r'\d+', str(freq_str))
+    return int(nums[0]) if nums else 1
+
+# --- 4. SAFE UPDATE FUNCTION ---
+def update_pm_date(row_index, current_next_date, freq_str):
+    """
+    Updates only the specific cells in Google Sheets to preserve formatting.
+    Note: row_index in pandas + 7 (5 rows header + 2 for 1-based index) = Sheet Row
+    """
     try:
-        # Clean the string and convert to date object
+        # 1. Calculate new dates
+        last_done = pd.to_datetime(current_next_date).date()
+        months = extract_months_count(freq_str)
+        new_next = add_months(last_done, months)
+        
+        # 2. Prepare the update
+        # We target columns F (Last Done) and G (Next Date)
+        # In Google Sheets, header=5 means our first data row is row 7
+        sheet_row = row_index + 7 
+        
+        # Update Last Done (Column F)
+        conn.update(spreadsheet=SHEET_URL, range=f"F{sheet_row}", data=[[str(last_done)]])
+        # Update Next Date (Column G)
+        conn.update(spreadsheet=SHEET_URL, range=f"G{sheet_row}", data=[[str(new_next)]])
+        
+        st.success(f"Updated row {sheet_row} successfully!")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Failed to update: {e}")
+
+# --- 5. STYLING ---
+def color_next_date(val):
+    try:
         date_obj = pd.to_datetime(val).date()
         today = datetime.now().date()
         next_week = today + timedelta(days=7)
-        
-        if date_obj < today:
-            return 'background-color: #ff4b4b; color: white;'  # Overdue - Red
-        elif today <= date_obj <= next_week:
-            return 'background-color: #fffd8d; color: black;'  # Due soon - Yellow
-        else:
-            return 'background-color: #90ee90; color: black;'  # OK - Green
-    except:
-        return '' # No color if not a valid date
-
-# --- 5. HELPER FUNCTIONS ---
-def extract_months(freq_str):
-    try:
-        nums = re.findall(r'\d+', str(freq_str))
-        return int(nums[0]) if nums else 1
-    except:
-        return 1
-
-def process_updates(df):
-    today = pd.Timestamp.now().normalize()
-    updated = False
-    for idx, row in df.iterrows():
-        try:
-            next_date = pd.to_datetime(row.iloc[6], errors='coerce')
-            if pd.notnull(next_date) and next_date <= today:
-                df.iat[idx, 5] = row.iloc[6]
-                months = extract_months(row.iloc[4])
-                new_next = next_date + pd.DateOffset(months=months)
-                df.iat[idx, 6] = new_next.strftime('%Y-%m-%d')
-                updated = True
-        except:
-            continue
-    if updated:
-        conn.update(spreadsheet=SHEET_URL, data=df)
-        st.success("Database updated!")
-    return df
+        if date_obj < today: return 'background-color: #ff4b4b; color: white;'
+        elif today <= date_obj <= next_week: return 'background-color: #fffd8d; color: black;'
+        else: return 'background-color: #90ee90; color: black;'
+    except: return ''
 
 # --- 6. MAIN UI ---
-if auth_status:
-    st.sidebar.success(f"Welcome {name}")
-    authenticator.logout('Logout', 'sidebar')
-    
-    df = load_data()
-    tab1, tab2 = st.tabs(["📊 Schedule View", "🛠️ Admin Control"])
-    
-    with tab1:
-        st.info(f"📅 **Server Date:** {datetime.now().strftime('%d/%m/%Y')}")
-        
-        if st.button("🔄 Sync & Auto-Update"):
-            df = process_updates(df)
-            st.rerun() # Refresh page to show new colors
-            
-        # Get the name of the 'Next Date' column
-        target_col = df.columns[6]
-        
-        # Apply the styling (using map instead of applymap)
-        styled_df = df.style.map(color_next_date, subset=[target_col])
-        
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
-        
-    with tab2:
-        st.subheader("Database Editor")
-        edited_df = st.data_editor(df, use_container_width=True, hide_index=True, num_rows="dynamic")
-        if st.button("💾 Save Changes"):
-            conn.update(spreadsheet=SHEET_URL, data=edited_df)
-            st.success("Synced!")
-            st.rerun()
+st.title("🛡️ ICPE Lab PM Live Manager")
+st.info(f"📅 **Today's Date:** {datetime.now().strftime('%d/%m/%Y')}")
 
-elif auth_status is False:
-    st.error("Login failed.")
-    st.dataframe(load_data(), use_container_width=True, hide_index=True)
+# Load data
+raw_df, visual_df = load_data()
 
-else:
-    st.title("ICPE Lab PM Schedule")
-    st.info("Please login to manage the database.")
-    # Show read-only styled table even for non-logged in users
-    raw_df = load_data()
-    target_col = raw_df.columns[6]
-    st.dataframe(raw_df.style.map(color_next_date, subset=[target_col]), use_container_width=True, hide_index=True)
+# Create a styled version of the table for display
+target_col = visual_df.columns[6]
+styled_df = visual_df.style.map(color_next_date, subset=[target_col])
+
+# Display the table
+st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
+st.divider()
+st.subheader("Manual Update Actions")
+
+# Create a clean interface with buttons for each row
+# We use a loop to create "Update" buttons for tasks that are due
+for idx, row in visual_df.iterrows():
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
+    
+    next_date_val = row.iloc[6]
+    tester_name = row.iloc[0]
+    activity = row.iloc[2]
+    
+    # Check if the task is overdue or due within 7 days
+    try:
+        is_due = pd.to_datetime(next_date_val).date() <= (datetime.now().date() + timedelta(days=7))
+    except:
+        is_due = False
+
+    if is_due:
+        with col1:
+            st.write(f"**{tester_name}**")
+        with col2:
+            st.write(f"*{activity}*")
+        with col3:
+            st.write(f"Next: {next_date_val}")
+        with col4:
+            if st.button(f"Confirm PM Done", key=f"btn_{idx}"):
+                update_pm_date(idx, next_date_val, row.iloc[4])
+
+st.success("Edit the Google Sheet directly for name changes or structural edits.")
