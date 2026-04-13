@@ -59,7 +59,7 @@ def apply_color(row):
         pass
     return colors
 
-# --- 5. מחסום כניסה (Global Login) ---
+# --- 5. מחסום כניסה (התאמה לפורמט Credentials) ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
@@ -69,19 +69,20 @@ if not st.session_state.authenticated:
         u_input = st.text_input("שם משתמש")
         p_input = st.text_input("סיסמה", type="password")
         if st.button("כניסה למערכת"):
-            # בדיקה מול Secrets (admin_user ו-admin_password)
             try:
-                if u_input == st.secrets["admin_user"] and p_input == st.secrets["admin_password"]:
+                # בדיקה לפי המבנה שציינת בסיקרטס
+                creds = st.secrets["credentials"]
+                if u_input == creds["usernames.admin.name"] and p_input == creds["usernames.admin.password"]:
                     st.session_state.authenticated = True
                     st.rerun()
                 else:
                     st.error("שם משתמש או סיסמה שגויים.")
-            except KeyError:
-                st.error("שגיאה: לא הוגדרו משתמש וסיסמה ב-Secrets של האפליקציה.")
-    st.stop() # עוצר את המשך הקוד עד להתחברות
+            except Exception as e:
+                st.error("שגיאה בגישה ל-Secrets. וודא שהפורמט תקין.")
+    st.stop()
 
-# --- 6. ניווט דפים (יופיע רק אחרי התחברות) ---
-st.sidebar.title(f"שלום, {st.secrets['admin_user']}")
+# --- 6. ניווט דפים (אחרי התחברות) ---
+st.sidebar.title(f"שלום, Admin")
 page = st.sidebar.radio("ניווט:", ["לוח בקרה PM", "Admin Settings"])
 if st.sidebar.button("התנתק"):
     st.session_state.authenticated = False
@@ -90,12 +91,11 @@ if st.sidebar.button("התנתק"):
 # --- דף לוח בקרה ---
 if page == "לוח בקרה PM":
     st.title("🛡️ ICPE Lab PM Management System")
-    
     if 'main_df' not in st.session_state:
         st.session_state.main_df = load_data()
 
     if st.session_state.main_df.empty:
-        st.warning("בסיס הנתונים ריק. נא לעבור ל-Admin Settings להוספת נתונים.")
+        st.warning("בסיס הנתונים ריק.")
         st.stop()
 
     display_df = st.session_state.main_df.copy()
@@ -103,7 +103,6 @@ if page == "לוח בקרה PM":
     display_df.insert(1, "Undo", False)
     styled_df = display_df.style.apply(apply_color, axis=1)
 
-    # הסתרת עמודות טכניות אחרונות
     all_cols = display_df.columns.tolist()
     last_two_cols = all_cols[-2:] 
     
@@ -129,13 +128,11 @@ if page == "לוח בקרה PM":
         for row_idx_str, changes in st.session_state.pm_editor["edited_rows"].items():
             row_idx = int(row_idx_str)
             months = extract_months_count(edited_df.at[row_idx, "Frequency"])
-            
             if changes.get("Update Status") is True:
                 curr = pd.to_datetime(edited_df.at[row_idx, "Next Date"]).date()
                 edited_df.at[row_idx, "Last Date Done"] = str(curr)
                 edited_df.at[row_idx, "Next Date"] = str(adjust_months(curr, months))
                 save_data(edited_df); st.session_state.main_df = load_data(); st.rerun()
-                
             if changes.get("Undo") is True:
                 curr_l = pd.to_datetime(edited_df.at[row_idx, "Last Date Done"]).date()
                 edited_df.at[row_idx, "Next Date"] = str(curr_l)
