@@ -20,26 +20,19 @@ def load_data():
                 with open(file_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     if data:
-                        df = pd.DataFrame(data)
-                        # וידאו עמודות בסיסיות (החלפנו Description ב-Equipment)
-                        if "Equipment" not in df.columns:
-                            if "Description" in df.columns:
-                                df.rename(columns={"Description": "Equipment"}, inplace=True)
-                            else:
-                                df["Equipment"] = ""
-                        return df
+                        return pd.DataFrame(data)
             except Exception:
                 continue
-    # מבנה ברירת מחדל נקי
-    return pd.DataFrame(columns=["Equipment", "Model", "Activity", "Group", "Frequency", "Last Date Done", "Next Date"])
+    # אם הקובץ ריק, מייצרים את המבנה המקורי שלך בדיוק
+    return pd.DataFrame(columns=["Model", "Activity", "Group", "Frequency", "Last Date Done", "Next Date"])
 
 def save_data(df):
     try:
+        # ניקוי עמודות ממשק לפני שמירה
         cols_to_drop = ["Update Status", "Undo"]
         save_df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
-        # הסרת שורות שאין בהן שם מכשיר
-        save_df = save_df[save_df["Equipment"].fillna("").str.strip() != ""]
         
+        # שמירת הנתונים כפי שהם
         data = save_df.to_dict(orient="records")
         temp_file = "temp_data.json"
         with open(temp_file, "w", encoding="utf-8") as f:
@@ -79,37 +72,32 @@ def apply_color(row):
     except: pass
     return colors
 
-# --- 5. מנגנון כניסה (Login) ---
+# --- 5. מנגנון כניסה ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
     st.title("🔐 כניסה למערכת ICPE Lab")
-    with st.form("login_gate"):
-        u_input = st.text_input("שם משתמש")
-        p_input = st.text_input("סיסמה", type="password")
+    with st.form("login"):
+        u = st.text_input("שם משתמש")
+        p = st.text_input("סיסמה", type="password")
         if st.form_submit_button("התחבר"):
-            try:
-                creds = st.secrets["credentials"]
-                if u_input == creds["admin_name"] and p_input == creds["admin_password"]:
-                    st.session_state.authenticated = True
-                    st.rerun()
-                else: st.error("פרטים שגויים")
-            except: st.error("שגיאה ב-Secrets")
+            creds = st.secrets["credentials"]
+            if u == creds["admin_name"] and p == creds["admin_password"]:
+                st.session_state.authenticated = True
+                st.rerun()
+            else: st.error("פרטים שגויים")
     st.stop()
 
 # --- 6. ניווט ---
 page = st.sidebar.radio("ניווט:", ["לוח בקרה PM", "ניהול נתונים (Admin)"])
-if st.sidebar.button("התנתק"):
-    st.session_state.authenticated = False
-    st.rerun()
 
 # --- דף 1: לוח בקרה PM ---
 if page == "לוח בקרה PM":
     st.title("🛡️ ICPE Lab PM Management System")
     df = load_data()
-    if df.empty or df["Equipment"].dropna().empty:
-        st.info("אין נתונים. הוסף רשומות בדף הניהול.")
+    if df.empty:
+        st.info("בסיס הנתונים ריק. הוסף נתונים בדף הניהול.")
         st.stop()
 
     display_df = df.copy()
@@ -123,15 +111,16 @@ if page == "לוח בקרה PM":
         "Last Date Done": st.column_config.Column(disabled=True),
     }
 
+    # תצוגת הטבלה
     edited_df = st.data_editor(display_df.style.apply(apply_color, axis=1), 
                                column_config=col_config, use_container_width=True, hide_index=True, key="pm_editor")
 
-    if st.button("💾 שמור שינויים ידניים"):
+    if st.button("💾 שמור שינויים"):
         save_data(edited_df)
-        st.success("השינויים נשמרו!")
+        st.success("נשמר!")
         st.rerun()
 
-    # לוגיקת כפתורים מהירה
+    # עדכון אוטומטי בלחיצה על V
     if st.session_state.pm_editor["edited_rows"]:
         for row_idx_str, changes in st.session_state.pm_editor["edited_rows"].items():
             idx = int(row_idx_str)
@@ -152,19 +141,17 @@ if page == "לוח בקרה PM":
 
 # --- דף 2: ניהול נתונים (Admin) ---
 elif page == "ניהול נתונים (Admin)":
-    st.title("⚙️ ניהול רשימת ציוד")
+    st.title("⚙️ ניהול נתונים")
     admin_df = load_data()
     
     if not admin_df.empty:
         st.download_button("📥 הורד גיבוי JSON", admin_df.to_json(orient="records"), "pm_backup.json")
 
     st.subheader("עריכת טבלה")
-    st.caption("עמודת ה-Equipment היא חובה לשמירה.")
-    
+    # עורך נתונים חופשי לגמרי - ללא עמודות כפויות
     edited_admin = st.data_editor(admin_df, use_container_width=True, num_rows="dynamic", key="admin_editor")
     
     if st.button("💾 שמור בסיס נתונים"):
-        # המערכת תסנן שורות שאין בהן Equipment ותשמור
         if save_data(edited_admin):
-            st.success("בסיס הנתונים עודכן בהצלחה!")
+            st.success("בסיס הנתונים נשמר בהצלחה!")
             st.rerun()
