@@ -12,7 +12,7 @@ st.set_page_config(page_title="ICPE Lab PM Manager", layout="wide")
 JSON_FILE = "pm_data.json"
 BACKUP_FILE = "pm_data_backup.json"
 
-# --- 2. ניהול נתונים בטוח ---
+# --- 2. ניהול נתונים ---
 def load_data():
     for file_path in [JSON_FILE, BACKUP_FILE]:
         if os.path.exists(file_path):
@@ -21,19 +21,25 @@ def load_data():
                     data = json.load(f)
                     if data:
                         df = pd.DataFrame(data)
-                        # לוודא שיש עמודות מינימליות
-                        required = ["Description", "Frequency", "Next Date"]
-                        for col in required:
-                            if col not in df.columns: df[col] = ""
+                        # וידאו עמודות בסיסיות (החלפנו Description ב-Equipment)
+                        if "Equipment" not in df.columns:
+                            if "Description" in df.columns:
+                                df.rename(columns={"Description": "Equipment"}, inplace=True)
+                            else:
+                                df["Equipment"] = ""
                         return df
             except Exception:
                 continue
-    return pd.DataFrame(columns=["Description", "Model", "Activity", "Group", "Frequency", "Last Date Done", "Next Date"])
+    # מבנה ברירת מחדל נקי
+    return pd.DataFrame(columns=["Equipment", "Model", "Activity", "Group", "Frequency", "Last Date Done", "Next Date"])
 
 def save_data(df):
     try:
         cols_to_drop = ["Update Status", "Undo"]
         save_df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
+        # הסרת שורות שאין בהן שם מכשיר
+        save_df = save_df[save_df["Equipment"].fillna("").str.strip() != ""]
+        
         data = save_df.to_dict(orient="records")
         temp_file = "temp_data.json"
         with open(temp_file, "w", encoding="utf-8") as f:
@@ -88,16 +94,12 @@ if not st.session_state.authenticated:
                 if u_input == creds["admin_name"] and p_input == creds["admin_password"]:
                     st.session_state.authenticated = True
                     st.rerun()
-                else:
-                    st.error("שם משתמש או סיסמה שגויים")
-            except:
-                st.error("שגיאה ב-Secrets")
+                else: st.error("פרטים שגויים")
+            except: st.error("שגיאה ב-Secrets")
     st.stop()
 
 # --- 6. ניווט ---
-st.sidebar.title("תפריט")
 page = st.sidebar.radio("ניווט:", ["לוח בקרה PM", "ניהול נתונים (Admin)"])
-
 if st.sidebar.button("התנתק"):
     st.session_state.authenticated = False
     st.rerun()
@@ -106,8 +108,8 @@ if st.sidebar.button("התנתק"):
 if page == "לוח בקרה PM":
     st.title("🛡️ ICPE Lab PM Management System")
     df = load_data()
-    if df.empty or df["Description"].dropna().empty:
-        st.info("אין נתונים להצגה. הוסף נתונים בדף הניהול.")
+    if df.empty or df["Equipment"].dropna().empty:
+        st.info("אין נתונים. הוסף רשומות בדף הניהול.")
         st.stop()
 
     display_df = df.copy()
@@ -124,12 +126,12 @@ if page == "לוח בקרה PM":
     edited_df = st.data_editor(display_df.style.apply(apply_color, axis=1), 
                                column_config=col_config, use_container_width=True, hide_index=True, key="pm_editor")
 
-    if st.button("💾 שמור שינויים"):
+    if st.button("💾 שמור שינויים ידניים"):
         save_data(edited_df)
-        st.success("נשמר!")
+        st.success("השינויים נשמרו!")
         st.rerun()
 
-    # לוגיקת עדכון מהיר
+    # לוגיקת כפתורים מהירה
     if st.session_state.pm_editor["edited_rows"]:
         for row_idx_str, changes in st.session_state.pm_editor["edited_rows"].items():
             idx = int(row_idx_str)
@@ -157,14 +159,12 @@ elif page == "ניהול נתונים (Admin)":
         st.download_button("📥 הורד גיבוי JSON", admin_df.to_json(orient="records"), "pm_backup.json")
 
     st.subheader("עריכת טבלה")
-    st.info("שים לב: עמודת ה-Description חייבת להיות מלאה כדי שהשורה תישמר.")
+    st.caption("עמודת ה-Equipment היא חובה לשמירה.")
     
-    # עורך נתונים ללא ולידציה חוסמת בזמן ההקלדה
     edited_admin = st.data_editor(admin_df, use_container_width=True, num_rows="dynamic", key="admin_editor")
     
     if st.button("💾 שמור בסיס נתונים"):
-        # סינון שורות ריקות לחלוטין שהתווספו בטעות
-        final_df = edited_admin.dropna(subset=["Description"])
-        if save_data(final_df):
-            st.success(f"נשמרו {len(final_df)} רשומות בהצלחה!")
+        # המערכת תסנן שורות שאין בהן Equipment ותשמור
+        if save_data(edited_admin):
+            st.success("בסיס הנתונים עודכן בהצלחה!")
             st.rerun()
