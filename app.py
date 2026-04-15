@@ -4,7 +4,7 @@ import json
 import requests
 import base64
 import re
-from datetime import datetime, date, timedelta  # הוספתי כאן את timedelta
+from datetime import datetime, date, timedelta
 from calendar import monthrange
 
 # --- 1. Page Config & Constants ---
@@ -167,7 +167,13 @@ if page == "PM Dashboard":
     display_df = display_df.sort_values(by=['sort_priority', 'Next Date'])
     display_df = display_df.drop(columns=['sort_priority'])
     
-    display_df.insert(0, "Update Status", False)
+    # Updated: Position "Update Status" checkbox next to "Next Date"
+    # Finding the index of "Next Date" to insert the checkbox right after it
+    if "Next Date" in display_df.columns:
+        next_date_idx = display_df.columns.get_loc("Next Date")
+        display_df.insert(next_date_idx + 1, "Update Status", False)
+    else:
+        display_df.insert(0, "Update Status", False)
     
     col_config = {
         "Update Status": st.column_config.CheckboxColumn("Done"),
