@@ -14,12 +14,13 @@ DATE_FORMAT = "%d/%m/%Y"
 # --- 2. עזרי תאריכים לפורמט ישראלי ---
 def parse_date(date_str):
     """הופך טקסט בפורמט dd/mm/yyyy לאובייקט תאריך בצורה בטוחה"""
-    if pd.isna(date_str) or date_str == "": return None
+    if pd.isna(date_str) or date_str == "" or date_str is None: return None
     try:
+        # ניסיון פורמט ישראלי
         return datetime.strptime(str(date_str).strip(), DATE_FORMAT).date()
     except ValueError:
-        # תמיכה בפורמט הישן למקרה של מעבר הדרגתי
         try:
+            # ניסיון פורמט בינלאומי (למקרה של נתונים ישנים)
             return pd.to_datetime(date_str).date()
         except:
             return None
@@ -27,26 +28,37 @@ def parse_date(date_str):
 def format_date(date_obj):
     """הופך אובייקט תאריך לטקסט בפורמט dd/mm/yyyy"""
     if date_obj is None or pd.isna(date_obj): return ""
+    if isinstance(date_obj, str): return date_obj
     return date_obj.strftime(DATE_FORMAT)
 
-# --- 3. ניהול נתונים מול GITHUB (שמירה תמידית) ---
+# --- 3. ניהול נתונים מול GITHUB ---
 def load_data():
+    if "github_token" not in st.secrets:
+        st.error("⚠️ שגיאה: המפתח github_token חסר ב-Secrets של Streamlit Cloud.")
+        return pd.DataFrame(columns=["Tester Name", "Model", "Activity", "Activity Group", "Frequency", "Last Date Done", "Next Date"])
+    
     try:
         token = st.secrets["github_token"]
         repo = st.secrets["github_repo"]
         path = st.secrets["github_file_path"]
         url = f"https://api.github.com/repos/{repo}/contents/{path}"
         
-        headers = {"Authorization": f"token {token}"}
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
         res = requests.get(url, headers=headers)
         
         if res.status_code == 200:
             content = base64.b64decode(res.json()['content']).decode('utf-8')
             return pd.DataFrame(json.loads(content))
+        elif res.status_code == 404:
+            return pd.DataFrame(columns=["Tester Name", "Model", "Activity", "Activity Group", "Frequency", "Last Date Done", "Next Date"])
         else:
+            st.error(f"GitHub Error ({res.status_code}): {res.text}")
             return pd.DataFrame(columns=["Tester Name", "Model", "Activity", "Activity Group", "Frequency", "Last Date Done", "Next Date"])
     except Exception as e:
-        st.error(f"שגיאת טעינה מ-GitHub: {e}")
+        st.error(f"Error loading data: {e}")
         return pd.DataFrame(columns=["Tester Name", "Model", "Activity", "Activity Group", "Frequency", "Last Date Done", "Next Date"])
 
 def save_data(df):
@@ -57,11 +69,9 @@ def save_data(df):
         url = f"https://api.github.com/repos/{repo}/contents/{path}"
         headers = {"Authorization": f"token {token}"}
 
-        # קבלת ה-SHA של הקובץ הקיים לעדכון
         res = requests.get(url, headers=headers)
         sha = res.json().get('sha') if res.status_code == 200 else None
 
-        # ניקוי עמודות ממשק
         cols_to_drop = ["Update Status", "Undo", "sort_priority"]
         save_df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
         
@@ -75,16 +85,12 @@ def save_data(df):
         }
         
         put_res = requests.put(url, headers=headers, json=payload)
-        if put_res.status_code in [200, 201]:
-            return True
-        else:
-            st.error(f"שגיאת סנכרון לגיט: {put_res.text}")
-            return False
+        return put_res.status_code in [200, 201]
     except Exception as e:
-        st.error(f"שגיאה בתהליך השמירה: {e}")
+        st.error(f"Save error: {e}")
         return False
 
-# --- 4. לוגיקה, צביעה ומיון ---
+# --- 4. לוגיקה וצביעה ---
 def adjust_months(sourcedate, months):
     if not sourcedate: return None
     month = sourcedate.month - 1 + months
@@ -101,9 +107,9 @@ def get_sort_priority(date_str):
     dt = parse_date(date_str)
     if not dt: return 3
     today = datetime.now().date()
-    if dt < today: return 0  # אדום (עבר זמנו)
-    if today <= dt <= (today + timedelta(days=7)): return 1  # צהוב (קרוב)
-    return 2  # ירוק (תקין)
+    if dt < today: return 0  # אדום
+    if today <= dt <= (today + timedelta(days=7)): return 1  # צהוב
+    return 2  # ירוק
 
 def apply_color(row):
     val = row.get("Next Date", "")
@@ -120,24 +126,23 @@ def apply_color(row):
     except: pass
     return colors
 
-# --- 5. אבטחת כניסה ---
+# --- 5. אבטחה ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
-    st.title("🔐 כניסה למערכת ICPE Lab")
+    st.title("🔐 כניסה למערכת")
     with st.form("login"):
         u = st.text_input("שם משתמש")
         p = st.text_input("סיסמה", type="password")
         if st.form_submit_button("התחבר"):
-            creds = st.secrets["credentials"]
-            if u == creds["admin_name"] and p == creds["admin_password"]:
+            if u == st.secrets["credentials"]["admin_name"] and p == st.secrets["credentials"]["admin_password"]:
                 st.session_state.authenticated = True
                 st.rerun()
             else: st.error("פרטים שגויים")
     st.stop()
 
-# --- 6. ממשק משתמש ---
+# --- 6. ניווט ---
 page = st.sidebar.radio("ניווט:", ["לוח בקרה PM", "ניהול נתונים (Admin)"])
 
 if page == "לוח בקרה PM":
@@ -145,14 +150,12 @@ if page == "לוח בקרה PM":
     df = load_data()
     
     if df.empty:
-        st.info("אין נתונים ב-GitHub. טען את הקובץ בדף ה-Admin.")
+        st.info("בסיס הנתונים ריק או לא נמצא ב-GitHub.")
         st.stop()
 
-    # 1. יצירת עמודת מיון (Sort Priority)
+    # הכנת טבלה עם מיון
     display_df = df.copy()
     display_df['sort_priority'] = display_df['Next Date'].apply(get_sort_priority)
-    
-    # 2. מיון כברירת מחדל (אדום -> צהוב -> ירוק)
     display_df = display_df.sort_values(by=['sort_priority', 'Next Date'])
     display_df = display_df.drop(columns=['sort_priority'])
     
@@ -171,10 +174,10 @@ if page == "לוח בקרה PM":
 
     if st.button("💾 שמור שינויים"):
         if save_data(edited_df):
-            st.success("נשמר וסונכרן ל-GitHub!")
+            st.success("נשמר ב-GitHub!")
             st.rerun()
 
-    # עדכון אוטומטי בלחיצה על הצ'קבוקס
+    # לוגיקת עדכון שורות
     if st.session_state.pm_editor["edited_rows"]:
         for row_idx_str, changes in st.session_state.pm_editor["edited_rows"].items():
             idx = int(row_idx_str)
@@ -196,27 +199,13 @@ if page == "לוח בקרה PM":
                     save_data(edited_df); st.rerun()
 
 elif page == "ניהול נתונים (Admin)":
-    st.title("⚙️ Admin - ניהול נתונים")
+    st.title("⚙️ ניהול נתונים")
     admin_df = load_data()
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("גיבוי")
-        st.download_button("📥 הורד JSON (פורמט ישראלי)", admin_df.to_json(orient="records", indent=4), "pm_backup.json")
-    
-    with col2:
-        st.subheader("טעינה ידנית")
-        up = st.file_uploader("העלה קובץ גיבוי", type="json")
-        if up and st.button("⬆️ טען ושמור ל-GitHub"):
-            new_df = pd.DataFrame(json.load(up))
-            if save_data(new_df):
-                st.success("הקובץ נטען וסונכרן בהצלחה!")
-                st.rerun()
-
-    st.divider()
-    st.subheader("עריכה ישירה של בסיס הנתונים")
+    st.subheader("עריכת בסיס נתונים")
     edited_admin = st.data_editor(admin_df, use_container_width=True, num_rows="dynamic")
+    
     if st.button("💾 שמור הכל ל-GitHub"):
         if save_data(edited_admin):
-            st.success("בסיס הנתונים עודכן ב-GitHub!")
+            st.success("הנתונים סונכרנו ל-GitHub בהצלחה!")
             st.rerun()
