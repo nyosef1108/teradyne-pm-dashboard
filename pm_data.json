@@ -297,15 +297,6 @@
         "Next Date": "10/06/2026"
     },
     {
-        "Tester Name": "UFP-26 ((MevoCarmel Clean Room)",
-        "Model": "Teradyne UltraFlex Plus",
-        "Activity": "EXT_calibration by Vendor",
-        "Activity Group": "External Calibration",
-        "Frequency": "12 month",
-        "Last Date Done": "08/01/2026",
-        "Next Date": "15/01/2027"
-    },
-    {
         "Tester Name": "UFP-6",
         "Model": "Teradyne UltraFlex Plus",
         "Activity": "HSD-P calibration",
@@ -313,6 +304,15 @@
         "Frequency": "6 month",
         "Last Date Done": "10/01/2026",
         "Next Date": "10/07/2026"
+    },
+    {
+        "Tester Name": "UFP-26 ((MevoCarmel Clean Room)",
+        "Model": "Teradyne UltraFlex Plus",
+        "Activity": "EXT_calibration by Vendor",
+        "Activity Group": "External Calibration",
+        "Frequency": "12 month",
+        "Last Date Done": "08/01/2026",
+        "Next Date": "15/01/2027"
     },
     {
         "Tester Name": "E1",
