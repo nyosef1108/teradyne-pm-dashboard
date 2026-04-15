@@ -4,7 +4,7 @@ import json
 import requests
 import base64
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timedelta  # הוספתי כאן את timedelta
 from calendar import monthrange
 
 # --- 1. Page Config & Constants ---
@@ -114,7 +114,7 @@ def extract_months_count(freq_str):
 def get_sort_priority(date_str):
     dt = parse_date(date_str)
     if not dt: return 3
-    today = datetime.now().date()
+    today = date.today()
     if dt < today: return 0  # Red
     if today <= dt <= (today + timedelta(days=7)): return 1  # Yellow
     return 2  # Green
@@ -126,7 +126,7 @@ def apply_color(row):
         idx = row.index.get_loc("Next Date")
         date_obj = parse_date(val)
         if not date_obj: return colors
-        today = datetime.now().date()
+        today = date.today()
         next_week = today + timedelta(days=7)
         if date_obj < today: colors[idx] = 'background-color: #ff4b4b; color: white;'
         elif today <= date_obj <= next_week: colors[idx] = 'background-color: #fffd8d; color: black;'
@@ -190,10 +190,8 @@ if page == "PM Dashboard":
             idx = int(row_idx_str)
             if changes.get("Update Status") is True:
                 months = extract_months_count(edited_df.at[idx, "Frequency"])
-                # We use "today" as the new completion date
-                today_date = datetime.now().date()
+                today_date = date.today()
                 
-                # Logic: Update Last Done to Today, Next Date = Today + Frequency
                 edited_df.at[idx, "Last Date Done"] = format_date(today_date)
                 
                 if months:
