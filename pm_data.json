@@ -81,15 +81,6 @@
         "Next Date": "23/04/2026"
     },
     {
-        "Tester Name": "UF7",
-        "Model": "Teradyne UltraFlex SC",
-        "Activity": "HSDU calibration",
-        "Activity Group": "Internal PM",
-        "Frequency": "3 month",
-        "Last Date Done": "16/04/2026",
-        "Next Date": "16/07/2026"
-    },
-    {
         "Tester Name": "UF8",
         "Model": "Teradyne UltraFlex SC",
         "Activity": "VSM cal Full_Check Continuity Clean filters Chiller clean",
@@ -347,8 +338,8 @@
         "Activity": "EXT_calibration by Vendor",
         "Activity Group": "External Calibration",
         "Frequency": "12 month",
-        "Last Date Done": "08/01/2026",
-        "Next Date": "15/01/2027"
+        "Last Date Done": "16/04/2026",
+        "Next Date": "16/04/2027"
     },
     {
         "Tester Name": "E1",
@@ -358,6 +349,15 @@
         "Frequency": "6 month ",
         "Last Date Done": "15/04/2026",
         "Next Date": "15/10/2026"
+    },
+    {
+        "Tester Name": "UF7",
+        "Model": "Teradyne UltraFlex SC",
+        "Activity": "HSDU calibration",
+        "Activity Group": "Internal PM",
+        "Frequency": "3 month",
+        "Last Date Done": "16/04/2026",
+        "Next Date": "16/07/2026"
     },
     {
         "Tester Name": "UFP-10 (Mattam)",
