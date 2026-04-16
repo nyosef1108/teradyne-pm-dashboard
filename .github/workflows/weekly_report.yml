@@ -1,0 +1,32 @@
+name: Weekly PM Report
+
+on:
+  schedule:
+    # מריץ בכל יום ראשון בשעה 08:00 בבוקר (שעון UTC - בערך 11:00 בבוקר בישראל)
+    - cron: '0 8 * * 0'
+  workflow_dispatch: # מאפשר לנו להריץ את זה ידנית עכשיו כדי לבדוק
+
+jobs:
+  send-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Run send_report script
+        env:
+          # כאן אנחנו מחברים את ה-Secrets שהגדרת בגיטהאב לתוך הקוד
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: python send_report.py
